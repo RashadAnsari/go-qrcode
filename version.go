@@ -1,38 +1,24 @@
-// go-qrcode
-// Copyright 2014 Tom Harwood
-
 package qrcode
 
 import (
-	"log"
+	"fmt"
 
-	bitset "github.com/skip2/go-qrcode/bitset"
+	"github.com/RashadAnsari/go-qrcode/internal/bitset"
 )
 
-// Error detection/recovery capacity.
-//
-// There are several levels of error detection/recovery capacity. Higher levels
-// of error recovery are able to correct more errors, with the trade-off of
-// increased symbol size.
 type RecoveryLevel int
 
 const (
 	// Level L: 7% error recovery.
 	Low RecoveryLevel = iota
-
 	// Level M: 15% error recovery. Good default choice.
 	Medium
-
 	// Level Q: 25% error recovery.
 	High
-
 	// Level H: 30% error recovery.
 	Highest
 )
 
-// qrCodeVersion describes the data length and encoding order of a single QR
-// Code version. There are 40 versions numbers x 4 recovery levels == 160
-// possible qrCodeVersion structures.
 type qrCodeVersion struct {
 	// Version number (1-40 inclusive).
 	version int
@@ -2789,21 +2775,6 @@ var (
 )
 
 var (
-	// Each QR Code contains a 15-bit Format Information value.  The 15 bits
-	// consist of 5 data bits concatenated with 10 error correction bits.
-	//
-	// The 5 data bits consist of:
-	// - 2 bits for the error correction level (L=01, M=00, G=11, H=10).
-	// - 3 bits for the data mask pattern identifier.
-	//
-	// formatBitSequence is a mapping from the 5 data bits to the completed 15-bit
-	// Format Information value.
-	//
-	// For example, a QR Code using error correction level L, and data mask
-	// pattern identifier 001:
-	//
-	// 01 | 001 = 01001 = 0x9
-	// formatBitSequence[0x9].qrCode = 0x72f3 = 111001011110011
 	formatBitSequence = []struct {
 		regular uint32
 		micro   uint32
@@ -2842,14 +2813,6 @@ var (
 		{0x2bed, 0x3bba},
 	}
 
-	// QR Codes version 7 and higher contain an 18-bit Version Information value,
-	// consisting of a 6 data bits and 12 error correction bits.
-	//
-	// versionBitSequence is a mapping from QR Code version to the completed
-	// 18-bit Version Information value.
-	//
-	// For example, a QR code of version 7:
-	// versionBitSequence[0x7] = 0x07c94 = 000111110010010100
 	versionBitSequence = []uint32{
 		0x00000,
 		0x00000,
@@ -2900,72 +2863,63 @@ const (
 	versionInfoLengthBits = 18
 )
 
-// formatInfo returns the 15-bit Format Information value for a QR
-// code.
-func (v qrCodeVersion) formatInfo(maskPattern int) *bitset.Bitset {
+func (v qrCodeVersion) formatInfo(maskPattern int) (*bitset.Bitset, error) {
 	formatID := 0
 
 	switch v.level {
 	case Low:
-		formatID = 0x08 // 0b01000
+		formatID = 0x08
 	case Medium:
-		formatID = 0x00 // 0b00000
+		formatID = 0x00
 	case High:
-		formatID = 0x18 // 0b11000
+		formatID = 0x18
 	case Highest:
-		formatID = 0x10 // 0b10000
+		formatID = 0x10
 	default:
-		log.Panicf("Invalid level %d", v.level)
+		return nil, fmt.Errorf("invalid level %d", v.level)
 	}
 
 	if maskPattern < 0 || maskPattern > 7 {
-		log.Panicf("Invalid maskPattern %d", maskPattern)
+		return nil, fmt.Errorf("invalid maskPattern %d", maskPattern)
 	}
 
 	formatID |= maskPattern & 0x7
 
 	result := bitset.New()
 
-	result.AppendUint32(formatBitSequence[formatID].regular, formatInfoLengthBits)
+	if err := result.AppendUint32(formatBitSequence[formatID].regular, formatInfoLengthBits); err != nil {
+		return nil, err
+	}
 
-	return result
+	return result, nil
 }
 
-// versionInfo returns the 18-bit Version Information value for a QR Code.
-//
-// Version Information is applicable only to QR Codes versions 7-40 inclusive.
-// nil is returned if Version Information is not required.
-func (v qrCodeVersion) versionInfo() *bitset.Bitset {
+func (v qrCodeVersion) versionInfo() (*bitset.Bitset, error) {
 	if v.version < 7 {
-		return nil
+		return nil, nil
 	}
 
 	result := bitset.New()
-	result.AppendUint32(versionBitSequence[v.version], 18)
 
-	return result
+	if err := result.AppendUint32(versionBitSequence[v.version], 18); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
-// numDataBits returns the data capacity in bits.
 func (v qrCodeVersion) numDataBits() int {
 	numDataBits := 0
+
 	for _, b := range v.block {
-		numDataBits += 8 * b.numBlocks * b.numDataCodewords // 8 bits in a byte
+		numDataBits += 8 * b.numBlocks * b.numDataCodewords
 	}
 
 	return numDataBits
 }
 
-// chooseQRCodeVersion chooses the most suitable QR Code version for a stated
-// data length in bits, the error recovery level required, and the data encoder
-// used.
-//
-// The chosen QR Code version is the smallest version able to fit numDataBits
-// and the optional terminator bits required by the specified encoder.
-//
-// On success the chosen QR Code version is returned.
 func chooseQRCodeVersion(level RecoveryLevel, encoder *dataEncoder, numDataBits int) *qrCodeVersion {
-	var chosenVersion *qrCodeVersion
+	var chosenVersion qrCodeVersion
 
 	for _, v := range versions {
 		if v.level != level {
@@ -2979,12 +2933,12 @@ func chooseQRCodeVersion(level RecoveryLevel, encoder *dataEncoder, numDataBits 
 		numFreeBits := v.numDataBits() - numDataBits
 
 		if numFreeBits >= 0 {
-			chosenVersion = &v
+			chosenVersion = v
 			break
 		}
 	}
 
-	return chosenVersion
+	return &chosenVersion
 }
 
 func (v qrCodeVersion) numTerminatorBitsRequired(numDataBits int) int {
@@ -3002,7 +2956,6 @@ func (v qrCodeVersion) numTerminatorBitsRequired(numDataBits int) int {
 	return numTerminatorBits
 }
 
-// numBlocks returns the number of blocks.
 func (v qrCodeVersion) numBlocks() int {
 	numBlocks := 0
 
@@ -3013,8 +2966,6 @@ func (v qrCodeVersion) numBlocks() int {
 	return numBlocks
 }
 
-// numBitsToPadToCodeword returns the number of bits required to pad data of
-// length numDataBits upto the nearest codeword size.
 func (v qrCodeVersion) numBitsToPadToCodeword(numDataBits int) int {
 	if numDataBits == v.numDataBits() {
 		return 0
@@ -3023,28 +2974,6 @@ func (v qrCodeVersion) numBitsToPadToCodeword(numDataBits int) int {
 	return (8 - numDataBits%8) % 8
 }
 
-// symbolSize returns the size of the QR Code symbol in number of modules (which
-// is both the width and height, since QR codes are square). The QR Code has
-// size symbolSize() x symbolSize() pixels. This does not include the quiet
-// zone.
 func (v qrCodeVersion) symbolSize() int {
 	return 21 + (v.version-1)*4
-}
-
-// quietZoneSize returns the number of pixels of border space on each side of
-// the QR Code. The quiet space assists with decoding.
-func (v qrCodeVersion) quietZoneSize() int {
-	return 4
-}
-
-// getQRCodeVersion returns the QR Code version by version number and recovery
-// level. Returns nil if the requested combination is not defined.
-func getQRCodeVersion(level RecoveryLevel, version int) *qrCodeVersion {
-	for _, v := range versions {
-		if v.level == level && v.version == version {
-			return &v
-		}
-	}
-
-	return nil
 }

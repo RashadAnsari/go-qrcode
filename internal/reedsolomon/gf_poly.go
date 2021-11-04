@@ -1,29 +1,16 @@
-// go-qrcode
-// Copyright 2014 Tom Harwood
-
 package reedsolomon
 
 import (
-	"fmt"
-	"log"
+	"errors"
 
-	bitset "github.com/skip2/go-qrcode/bitset"
+	"github.com/RashadAnsari/go-qrcode/internal/bitset"
 )
 
-// gfPoly is a polynomial over GF(2^8).
 type gfPoly struct {
-	// The ith value is the coefficient of the ith degree of x.
-	// term[0]*(x^0) + term[1]*(x^1) + term[2]*(x^2) ...
 	term []gfElement
 }
 
-// newGFPolyFromData returns |data| as a polynomial over GF(2^8).
-//
-// Each data byte becomes the coefficient of an x term.
-//
-// For an n byte input the polynomial is:
-// data[n-1]*(x^n-1) + data[n-2]*(x^n-2) ... + data[0]*(x^0).
-func newGFPolyFromData(data *bitset.Bitset) gfPoly {
+func newGFPolyFromData(data *bitset.Bitset) (gfPoly, error) {
 	numTotalBytes := data.Len() / 8
 	if data.Len()%8 != 0 {
 		numTotalBytes++
@@ -32,15 +19,21 @@ func newGFPolyFromData(data *bitset.Bitset) gfPoly {
 	result := gfPoly{term: make([]gfElement, numTotalBytes)}
 
 	i := numTotalBytes - 1
+
 	for j := 0; j < data.Len(); j += 8 {
-		result.term[i] = gfElement(data.ByteAt(j))
+		by, err := data.ByteAt(j)
+		if err != nil {
+			return gfPoly{}, err
+		}
+
+		result.term[i] = gfElement(by)
+
 		i--
 	}
 
-	return result
+	return result, nil
 }
 
-// newGFPolyMonomial returns term*(x^degree).
 func newGFPolyMonomial(term gfElement, degree int) gfPoly {
 	if term == gfZero {
 		return gfPoly{}
@@ -56,6 +49,7 @@ func (e gfPoly) data(numTerms int) []byte {
 	result := make([]byte, numTerms)
 
 	i := numTerms - len(e.term)
+
 	for j := len(e.term) - 1; j >= 0; j-- {
 		result[i] = byte(e.term[j])
 		i++
@@ -64,12 +58,10 @@ func (e gfPoly) data(numTerms int) []byte {
 	return result
 }
 
-// numTerms returns the number of
 func (e gfPoly) numTerms() int {
 	return len(e.term)
 }
 
-// gfPolyMultiply returns a * b.
 func gfPolyMultiply(a, b gfPoly) gfPoly {
 	numATerms := a.numTerms()
 	numBTerms := b.numTerms()
@@ -90,18 +82,20 @@ func gfPolyMultiply(a, b gfPoly) gfPoly {
 	return result.normalised()
 }
 
-// gfPolyRemainder return the remainder of numerator / denominator.
-func gfPolyRemainder(numerator, denominator gfPoly) gfPoly {
+func gfPolyRemainder(numerator, denominator gfPoly) (gfPoly, error) {
 	if denominator.equals(gfPoly{}) {
-		log.Panicln("Remainder by zero")
+		return gfPoly{}, errors.New("remainder by zero")
 	}
 
 	remainder := numerator
 
 	for remainder.numTerms() >= denominator.numTerms() {
 		degree := remainder.numTerms() - denominator.numTerms()
-		coefficient := gfDivide(remainder.term[remainder.numTerms()-1],
-			denominator.term[denominator.numTerms()-1])
+
+		coefficient, err := gfDivide(remainder.term[remainder.numTerms()-1], denominator.term[denominator.numTerms()-1])
+		if err != nil {
+			return gfPoly{}, err
+		}
 
 		divisor := gfPolyMultiply(denominator,
 			newGFPolyMonomial(coefficient, degree))
@@ -109,10 +103,9 @@ func gfPolyRemainder(numerator, denominator gfPoly) gfPoly {
 		remainder = gfPolyAdd(remainder, divisor)
 	}
 
-	return remainder.normalised()
+	return remainder.normalised(), nil
 }
 
-// gfPolyAdd returns a + b.
 func gfPolyAdd(a, b gfPoly) gfPoly {
 	numATerms := a.numTerms()
 	numBTerms := b.numTerms()
@@ -159,34 +152,9 @@ func (e gfPoly) normalised() gfPoly {
 	return e
 }
 
-func (e gfPoly) string(useIndexForm bool) string {
-	var str string
-	numTerms := e.numTerms()
-
-	for i := numTerms - 1; i >= 0; i-- {
-		if e.term[i] > 0 {
-			if len(str) > 0 {
-				str += " + "
-			}
-
-			if !useIndexForm {
-				str += fmt.Sprintf("%dx^%d", e.term[i], i)
-			} else {
-				str += fmt.Sprintf("a^%dx^%d", gfLogTable[e.term[i]], i)
-			}
-		}
-	}
-
-	if len(str) == 0 {
-		str = "0"
-	}
-
-	return str
-}
-
-// equals returns true if e == other.
 func (e gfPoly) equals(other gfPoly) bool {
 	var minecPoly *gfPoly
+
 	var maxecPoly *gfPoly
 
 	if e.numTerms() > other.numTerms() {

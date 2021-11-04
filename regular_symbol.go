@@ -1,10 +1,7 @@
-// go-qrcode
-// Copyright 2014 Tom Harwood
-
 package qrcode
 
 import (
-	bitset "github.com/skip2/go-qrcode/bitset"
+	"github.com/RashadAnsari/go-qrcode/internal/bitset"
 )
 
 type regularSymbol struct {
@@ -17,7 +14,6 @@ type regularSymbol struct {
 	size   int
 }
 
-// Abbreviated true/false.
 const (
 	b0 = false
 	b1 = true
@@ -104,14 +100,7 @@ var (
 	}
 )
 
-func buildRegularSymbol(version qrCodeVersion, mask int,
-	data *bitset.Bitset, includeQuietZone bool) (*symbol, error) {
-
-	quietZoneSize := 0
-	if includeQuietZone {
-		quietZoneSize = version.quietZoneSize()
-	}
-
+func buildRegularSymbol(version qrCodeVersion, mask int, data *bitset.Bitset, quietZoneSize int) (*symbol, error) {
 	m := &regularSymbol{
 		version: version,
 		mask:    mask,
@@ -124,8 +113,14 @@ func buildRegularSymbol(version qrCodeVersion, mask int,
 	m.addFinderPatterns()
 	m.addAlignmentPatterns()
 	m.addTimingPatterns()
-	m.addFormatInfo()
-	m.addVersionInfo()
+
+	if err := m.addFormatInfo(); err != nil {
+		return nil, err
+	}
+
+	if err := m.addVersionInfo(); err != nil {
+		return nil, err
+	}
 
 	ok, err := m.addData()
 	if !ok {
@@ -180,58 +175,116 @@ func (m *regularSymbol) addTimingPatterns() {
 	}
 }
 
-func (m *regularSymbol) addFormatInfo() {
+func (m *regularSymbol) addFormatInfo() error {
 	fpSize := finderPatternSize
 	l := formatInfoLengthBits - 1
 
-	f := m.version.formatInfo(m.mask)
+	f, err := m.version.formatInfo(m.mask)
+	if err != nil {
+		return err
+	}
 
 	// Bits 0-7, under the top right finder pattern.
 	for i := 0; i <= 7; i++ {
-		m.symbol.set(m.size-i-1, fpSize+1, f.At(l-i))
+		bo, err := f.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(m.size-i-1, fpSize+1, bo)
 	}
 
 	// Bits 0-5, right of the top left finder pattern.
 	for i := 0; i <= 5; i++ {
-		m.symbol.set(fpSize+1, i, f.At(l-i))
+		bo, err := f.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(fpSize+1, i, bo)
 	}
 
 	// Bits 6-8 on the corner of the top left finder pattern.
-	m.symbol.set(fpSize+1, fpSize, f.At(l-6))
-	m.symbol.set(fpSize+1, fpSize+1, f.At(l-7))
-	m.symbol.set(fpSize, fpSize+1, f.At(l-8))
+	bo, err := f.At(l - 6)
+	if err != nil {
+		return err
+	}
+
+	m.symbol.set(fpSize+1, fpSize, bo)
+
+	bo, err = f.At(l - 7)
+	if err != nil {
+		return err
+	}
+
+	m.symbol.set(fpSize+1, fpSize+1, bo)
+
+	bo, err = f.At(l - 8)
+	if err != nil {
+		return err
+	}
+
+	m.symbol.set(fpSize, fpSize+1, bo)
 
 	// Bits 9-14 on the underside of the top left finder pattern.
 	for i := 9; i <= 14; i++ {
-		m.symbol.set(14-i, fpSize+1, f.At(l-i))
+		bo, err := f.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(14-i, fpSize+1, bo)
 	}
 
 	// Bits 8-14 on the right side of the bottom left finder pattern.
 	for i := 8; i <= 14; i++ {
-		m.symbol.set(fpSize+1, m.size-fpSize+i-8, f.At(l-i))
+		bo, err := f.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(fpSize+1, m.size-fpSize+i-8, bo)
 	}
 
 	// Always dark symbol.
 	m.symbol.set(fpSize+1, m.size-fpSize-1, true)
+
+	return nil
 }
 
-func (m *regularSymbol) addVersionInfo() {
+func (m *regularSymbol) addVersionInfo() error {
 	fpSize := finderPatternSize
 
-	v := m.version.versionInfo()
+	v, err := m.version.versionInfo()
+	if err != nil {
+		return err
+	}
+
 	l := versionInfoLengthBits - 1
 
 	if v == nil {
-		return
+		return nil
 	}
 
 	for i := 0; i < v.Len(); i++ {
 		// Above the bottom left finder pattern.
-		m.symbol.set(i/3, m.size-fpSize-4+i%3, v.At(l-i))
+		bo, err := v.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(i/3, m.size-fpSize-4+i%3, bo)
 
 		// Left of the top right finder pattern.
-		m.symbol.set(m.size-fpSize-4+i%3, i/3, v.At(l-i))
+		bo, err = v.At(l - i)
+		if err != nil {
+			return err
+		}
+
+		m.symbol.set(m.size-fpSize-4+i%3, i/3, bo)
 	}
+
+	return nil
 }
 
 type direction uint8
@@ -270,7 +323,12 @@ func (m *regularSymbol) addData() (bool, error) {
 		}
 
 		// != is equivalent to XOR.
-		m.symbol.set(x+xOffset, y, mask != m.data.At(i))
+		bo, err := m.data.At(i)
+		if err != nil {
+			return false, err
+		}
+
+		m.symbol.set(x+xOffset, y, mask != bo)
 
 		if i == m.data.Len()-1 {
 			break

@@ -1,75 +1,20 @@
-// go-qrcode
-// Copyright 2014 Tom Harwood
-
 package qrcode
 
 import (
 	"errors"
-	"log"
+	"fmt"
 
-	bitset "github.com/skip2/go-qrcode/bitset"
+	"github.com/RashadAnsari/go-qrcode/internal/bitset"
 )
 
-// Data encoding.
-//
-// The main data portion of a QR Code consists of one or more segments of data.
-// A segment consists of:
-//
-// - The segment Data Mode: numeric, alphanumeric, or byte.
-// - The length of segment in bits.
-// - Encoded data.
-//
-// For example, the string "123ZZ#!#!" may be represented as:
-//
-// [numeric, 3, "123"] [alphanumeric, 2, "ZZ"] [byte, 4, "#!#!"]
-//
-// Multiple data modes exist to minimise the size of encoded data. For example,
-// 8-bit bytes require 8 bits to encode each, but base 10 numeric data can be
-// encoded at a higher density of 3 numbers (e.g. 123) per 10 bits.
-//
-// Some data can be represented in multiple modes. Numeric data can be
-// represented in all three modes, whereas alphanumeric data (e.g. 'A') can be
-// represented in alphanumeric and byte mode.
-//
-// Starting a new segment (to use a different Data Mode) has a cost, the bits to
-// state the new segment Data Mode and length. To minimise each QR Code's symbol
-// size, an optimisation routine coalesces segment types where possible, to
-// reduce the encoded data length.
-//
-// There are several other data modes available (e.g. Kanji mode) which are not
-// implemented here.
-
-// A segment encoding mode.
 type dataMode uint8
 
 const (
-	// Each dataMode is a subset of the subsequent dataMode:
-	// dataModeNone < dataModeNumeric < dataModeAlphanumeric < dataModeByte
-	//
-	// This ordering is important for determining which data modes a character can
-	// be encoded with. E.g. 'E' can be encoded in both dataModeAlphanumeric and
-	// dataModeByte.
 	dataModeNone dataMode = 1 << iota
 	dataModeNumeric
 	dataModeAlphanumeric
 	dataModeByte
 )
-
-// dataModeString returns d as a short printable string.
-func dataModeString(d dataMode) string {
-	switch d {
-	case dataModeNone:
-		return "none"
-	case dataModeNumeric:
-		return "numeric"
-	case dataModeAlphanumeric:
-		return "alphanumeric"
-	case dataModeByte:
-		return "byte"
-	}
-
-	return "unknown"
-}
 
 type dataEncoderType uint8
 
@@ -79,16 +24,11 @@ const (
 	dataEncoderType27To40
 )
 
-// segment is a single segment of data.
 type segment struct {
-	// Data Mode (e.g. numeric).
 	dataMode dataMode
-
-	// segment data (e.g. "abc").
-	data []byte
+	data     []byte
 }
 
-// A dataEncoder encodes data for a particular QR Code version.
 type dataEncoder struct {
 	// Minimum & maximum versions supported.
 	minVersion int
@@ -114,13 +54,10 @@ type dataEncoder struct {
 	optimised []segment
 }
 
-// newDataEncoder constructs a dataEncoder.
-func newDataEncoder(t dataEncoderType) *dataEncoder {
-	d := &dataEncoder{}
-
+func newDataEncoder(t dataEncoderType) (*dataEncoder, error) {
 	switch t {
 	case dataEncoderType1To9:
-		d = &dataEncoder{
+		return &dataEncoder{
 			minVersion:                   1,
 			maxVersion:                   9,
 			numericModeIndicator:         bitset.New(b0, b0, b0, b1),
@@ -129,9 +66,9 @@ func newDataEncoder(t dataEncoderType) *dataEncoder {
 			numNumericCharCountBits:      10,
 			numAlphanumericCharCountBits: 9,
 			numByteCharCountBits:         8,
-		}
+		}, nil
 	case dataEncoderType10To26:
-		d = &dataEncoder{
+		return &dataEncoder{
 			minVersion:                   10,
 			maxVersion:                   26,
 			numericModeIndicator:         bitset.New(b0, b0, b0, b1),
@@ -140,9 +77,9 @@ func newDataEncoder(t dataEncoderType) *dataEncoder {
 			numNumericCharCountBits:      12,
 			numAlphanumericCharCountBits: 11,
 			numByteCharCountBits:         16,
-		}
+		}, nil
 	case dataEncoderType27To40:
-		d = &dataEncoder{
+		return &dataEncoder{
 			minVersion:                   27,
 			maxVersion:                   40,
 			numericModeIndicator:         bitset.New(b0, b0, b0, b1),
@@ -151,17 +88,12 @@ func newDataEncoder(t dataEncoderType) *dataEncoder {
 			numNumericCharCountBits:      14,
 			numAlphanumericCharCountBits: 13,
 			numByteCharCountBits:         16,
-		}
+		}, nil
 	default:
-		log.Panic("Unknown dataEncoderType")
+		return nil, errors.New("unknown dataEncoderType")
 	}
-
-	return d
 }
 
-// encode data as one or more segments and return the encoded data.
-//
-// The returned data does not include the terminator bit sequence.
 func (d *dataEncoder) encode(data []byte) (*bitset.Bitset, error) {
 	d.data = data
 	d.actual = nil
@@ -182,11 +114,13 @@ func (d *dataEncoder) encode(data []byte) (*bitset.Bitset, error) {
 
 	// Check if a single byte encoded segment would be more efficient.
 	optimizedLength := 0
+
 	for _, s := range d.optimised {
 		length, err := d.encodedLength(s.dataMode, len(s.data))
 		if err != nil {
 			return nil, err
 		}
+
 		optimizedLength += length
 	}
 
@@ -196,33 +130,30 @@ func (d *dataEncoder) encode(data []byte) (*bitset.Bitset, error) {
 	}
 
 	if singleByteSegmentLength <= optimizedLength {
-		d.optimised = []segment{segment{dataMode: highestRequiredMode, data: d.data}}
+		d.optimised = []segment{{dataMode: highestRequiredMode, data: d.data}}
 	}
 
 	// Encode data.
 	encoded := bitset.New()
+
 	for _, s := range d.optimised {
-		d.encodeDataRaw(s.data, s.dataMode, encoded)
+		if err := d.encodeDataRaw(s.data, s.dataMode, encoded); err != nil {
+			return nil, err
+		}
 	}
 
 	return encoded, nil
 }
 
-// classifyDataModes classifies the raw data into unoptimised segments.
-// e.g. "123ZZ#!#!" =>
-// [numeric, 3, "123"] [alphanumeric, 2, "ZZ"] [byte, 4, "#!#!"].
-//
-// Returns the highest data mode needed to encode the data. e.g. for a mixed
-// numeric/alphanumeric input, the highest is alphanumeric.
-//
-// dataModeNone < dataModeNumeric < dataModeAlphanumeric < dataModeByte
 func (d *dataEncoder) classifyDataModes() dataMode {
 	var start int
+
 	mode := dataModeNone
 	highestRequiredMode := mode
 
 	for i, v := range d.data {
-		newMode := dataModeNone
+		var newMode dataMode
+
 		switch {
 		case v >= 0x30 && v <= 0x39:
 			newMode = dataModeNumeric
@@ -253,15 +184,6 @@ func (d *dataEncoder) classifyDataModes() dataMode {
 	return highestRequiredMode
 }
 
-// optimiseDataModes optimises the list of segments to reduce the overall output
-// encoded data length.
-//
-// The algorithm coalesces adjacent segments. segments are only coalesced when
-// the Data Modes are compatible, and when the coalesced segment has a shorter
-// encoded length than separate segments.
-//
-// Multiple segments may be coalesced. For example a string of alternating
-// alphanumeric/numeric segments ANANANANA can be optimised to just A.
 func (d *dataEncoder) optimiseDataModes() error {
 	for i := 0; i < len(d.actual); {
 		mode := d.actual[i].dataMode
@@ -277,33 +199,30 @@ func (d *dataEncoder) optimiseDataModes() error {
 			}
 
 			coalescedLength, err := d.encodedLength(mode, numChars+nextNumChars)
-
 			if err != nil {
 				return err
 			}
 
 			seperateLength1, err := d.encodedLength(mode, numChars)
-
 			if err != nil {
 				return err
 			}
 
 			seperateLength2, err := d.encodedLength(nextMode, nextNumChars)
-
 			if err != nil {
 				return err
 			}
 
 			if coalescedLength < seperateLength1+seperateLength2 {
 				j++
+
 				numChars += nextNumChars
 			} else {
 				break
 			}
 		}
 
-		optimised := segment{dataMode: mode,
-			data: make([]byte, 0, numChars)}
+		optimised := segment{dataMode: mode, data: make([]byte, 0, numChars)}
 
 		for k := i; k < j; k++ {
 			optimised.data = append(optimised.data, d.actual[k].data...)
@@ -317,17 +236,26 @@ func (d *dataEncoder) optimiseDataModes() error {
 	return nil
 }
 
-// encodeDataRaw encodes data in dataMode. The encoded data is appended to
-// encoded.
-func (d *dataEncoder) encodeDataRaw(data []byte, dataMode dataMode, encoded *bitset.Bitset) {
-	modeIndicator := d.modeIndicator(dataMode)
-	charCountBits := d.charCountBits(dataMode)
+func (d *dataEncoder) encodeDataRaw(data []byte, dataMode dataMode, encoded *bitset.Bitset) error {
+	modeIndicator, err := d.modeIndicator(dataMode)
+	if err != nil {
+		return err
+	}
+
+	charCountBits, err := d.charCountBits(dataMode)
+	if err != nil {
+		return err
+	}
 
 	// Append mode indicator.
-	encoded.Append(modeIndicator)
+	if err := encoded.Append(modeIndicator); err != nil {
+		return err
+	}
 
 	// Append character count.
-	encoded.AppendUint32(uint32(len(data)), charCountBits)
+	if err := encoded.AppendUint32(uint32(len(data)), charCountBits); err != nil {
+		return err
+	}
 
 	// Append data.
 	switch dataMode {
@@ -336,6 +264,7 @@ func (d *dataEncoder) encodeDataRaw(data []byte, dataMode dataMode, encoded *bit
 			charsRemaining := len(data) - i
 
 			var value uint32
+
 			bitsUsed := 1
 
 			for j := 0; j < charsRemaining && j < 3; j++ {
@@ -343,79 +272,85 @@ func (d *dataEncoder) encodeDataRaw(data []byte, dataMode dataMode, encoded *bit
 				value += uint32(data[i+j] - 0x30)
 				bitsUsed += 3
 			}
-			encoded.AppendUint32(value, bitsUsed)
+
+			if err := encoded.AppendUint32(value, bitsUsed); err != nil {
+				return err
+			}
 		}
 	case dataModeAlphanumeric:
 		for i := 0; i < len(data); i += 2 {
 			charsRemaining := len(data) - i
 
 			var value uint32
+
 			for j := 0; j < charsRemaining && j < 2; j++ {
 				value *= 45
-				value += encodeAlphanumericCharacter(data[i+j])
+
+				v, err := encodeAlphanumericCharacter(data[i+j])
+				if err != nil {
+					return err
+				}
+
+				value += v
 			}
 
 			bitsUsed := 6
+
 			if charsRemaining > 1 {
 				bitsUsed = 11
 			}
 
-			encoded.AppendUint32(value, bitsUsed)
+			if err := encoded.AppendUint32(value, bitsUsed); err != nil {
+				return err
+			}
 		}
 	case dataModeByte:
 		for _, b := range data {
-			encoded.AppendByte(b, 8)
+			if err := encoded.AppendByte(b, 8); err != nil {
+				return err
+			}
 		}
-	}
-}
-
-// modeIndicator returns the segment header bits for a segment of type dataMode.
-func (d *dataEncoder) modeIndicator(dataMode dataMode) *bitset.Bitset {
-	switch dataMode {
-	case dataModeNumeric:
-		return d.numericModeIndicator
-	case dataModeAlphanumeric:
-		return d.alphanumericModeIndicator
-	case dataModeByte:
-		return d.byteModeIndicator
-	default:
-		log.Panic("Unknown data mode")
 	}
 
 	return nil
 }
 
-// charCountBits returns the number of bits used to encode the length of a data
-// segment of type dataMode.
-func (d *dataEncoder) charCountBits(dataMode dataMode) int {
+func (d *dataEncoder) modeIndicator(dataMode dataMode) (*bitset.Bitset, error) {
 	switch dataMode {
 	case dataModeNumeric:
-		return d.numNumericCharCountBits
+		return d.numericModeIndicator, nil
 	case dataModeAlphanumeric:
-		return d.numAlphanumericCharCountBits
+		return d.alphanumericModeIndicator, nil
 	case dataModeByte:
-		return d.numByteCharCountBits
+		return d.byteModeIndicator, nil
 	default:
-		log.Panic("Unknown data mode")
+		return nil, errors.New("unknown data mode")
 	}
-
-	return 0
 }
 
-// encodedLength returns the number of bits required to encode n symbols in
-// dataMode.
-//
-// The number of bits required is affected by:
-//	- QR code type - Mode Indicator length.
-//	- Data mode - number of bits used to represent data length.
-//	- Data mode - how the data is encoded.
-//	- Number of symbols encoded.
-//
-// An error is returned if the mode is not supported, or the length requested is
-// too long to be represented.
+func (d *dataEncoder) charCountBits(dataMode dataMode) (int, error) {
+	switch dataMode {
+	case dataModeNumeric:
+		return d.numNumericCharCountBits, nil
+	case dataModeAlphanumeric:
+		return d.numAlphanumericCharCountBits, nil
+	case dataModeByte:
+		return d.numByteCharCountBits, nil
+	default:
+		return 0, errors.New("unknown data mode")
+	}
+}
+
 func (d *dataEncoder) encodedLength(dataMode dataMode, n int) (int, error) {
-	modeIndicator := d.modeIndicator(dataMode)
-	charCountBits := d.charCountBits(dataMode)
+	modeIndicator, err := d.modeIndicator(dataMode)
+	if err != nil {
+		return 0, err
+	}
+
+	charCountBits, err := d.charCountBits(dataMode)
+	if err != nil {
+		return 0, err
+	}
 
 	if modeIndicator == nil {
 		return 0, errors.New("mode not supported")
@@ -446,41 +381,35 @@ func (d *dataEncoder) encodedLength(dataMode dataMode, n int) (int, error) {
 	return length, nil
 }
 
-// encodeAlphanumericChar returns the QR Code encoded value of v.
-//
-// v must be a QR Code defined alphanumeric character: 0-9, A-Z, SP, $%*+-./ or
-// :. The characters are mapped to values in the range 0-44 respectively.
-func encodeAlphanumericCharacter(v byte) uint32 {
+func encodeAlphanumericCharacter(v byte) (uint32, error) {
 	c := uint32(v)
 
 	switch {
 	case c >= '0' && c <= '9':
 		// 0-9 encoded as 0-9.
-		return c - '0'
+		return c - '0', nil
 	case c >= 'A' && c <= 'Z':
 		// A-Z encoded as 10-35.
-		return c - 'A' + 10
+		return c - 'A' + 10, nil
 	case c == ' ':
-		return 36
+		return 36, nil
 	case c == '$':
-		return 37
+		return 37, nil
 	case c == '%':
-		return 38
+		return 38, nil
 	case c == '*':
-		return 39
+		return 39, nil
 	case c == '+':
-		return 40
+		return 40, nil
 	case c == '-':
-		return 41
+		return 41, nil
 	case c == '.':
-		return 42
+		return 42, nil
 	case c == '/':
-		return 43
+		return 43, nil
 	case c == ':':
-		return 44
+		return 44, nil
 	default:
-		log.Panicf("encodeAlphanumericCharacter() with non alphanumeric char %v.", v)
+		return 0, fmt.Errorf("encodeAlphanumericCharacter() with non alphanumeric char %v", v)
 	}
-
-	return 0
 }

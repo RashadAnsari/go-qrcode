@@ -1,24 +1,3 @@
-# Go QR Code
-
-[![Build](https://github.com/RashadAnsari/go-qrcode/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/RashadAnsari/go-qrcode/actions/workflows/main.yml)
-
-QR Code encoder (Go).
-
-## Install
-
-```bash
-go get github.com/RashadAnsari/go-qrcode
-```
-
-## Usage
-
-```go
-import qrcode "github.com/RashadAnsari/go-qrcode"
-```
-
-## Example
-
-```go
 package main
 
 import (
@@ -80,8 +59,3 @@ func stdoutBase64(FormatFunc func(_ int) ([]byte, error)) {
 
 	fmt.Println(string(bytes))
 }
-```
-
-## Maximum Capacity
-
-The maximum capacity of a QR Code varies according to the content encoded and the error recovery level. The maximum capacity is 2,953 bytes, 4,296 alphanumeric characters, 7,089 numeric digits, or a combination.
