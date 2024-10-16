@@ -1,7 +1,5 @@
 # Go QR Code
 
-[![Build](https://github.com/RashadAnsari/go-qrcode/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/RashadAnsari/go-qrcode/actions/workflows/main.yml)
-
 QR Code encoder (Go).
 
 ## Install
